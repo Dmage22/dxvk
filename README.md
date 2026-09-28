@@ -1,6 +1,6 @@
 # DXVK ARM64EC builds (branch `wcp`)
 
-This branch only holds a build workflow. It builds **unmodified** upstream DXVK tags from
+This branch only holds a build workflow. It builds upstream DXVK tags (unmodified, or with the Ph42oN gplasync patch for the `gplasync` variant) from
 [doitsujin/dxvk](https://github.com/doitsujin/dxvk) with llvm-mingw and packages them as a
 GameNative/Winlator `.wcp`:
 

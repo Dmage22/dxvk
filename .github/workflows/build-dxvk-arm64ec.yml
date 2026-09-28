@@ -21,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         dxvk: [ "2.7.1", "3.1.1" ]
+        variant: [ "standard", "gplasync" ]
     steps:
       - name: Checkout build tools
         uses: actions/checkout@v4
@@ -65,6 +66,13 @@ jobs:
             sed -i "s/arm64ec-w64-mingw32-widl/x86_64-w64-mingw32-widl/" wcp/tools/arm64ec.meson.ini
           fi
 
+      - name: Apply gplasync patch (Ph42oN/dxvk-gplasync)
+        if: matrix.variant == 'gplasync'
+        working-directory: dxvk
+        run: |
+          wget -q -O gplasync.patch "https://gitlab.com/Ph42oN/dxvk-gplasync/-/raw/main/patches/dxvk-gplasync-${{ matrix.dxvk }}-1.patch"
+          patch -p1 --forward < gplasync.patch
+
       - name: Apply llvm-mingw compatibility fixups
         run: bash wcp/tools/libcxx-compat.sh dxvk
 
@@ -82,7 +90,7 @@ jobs:
 
       - name: Package .wcp
         run: |
-          VER="${{ matrix.dxvk }}-arm64ec-dm"
+          if [ "${{ matrix.variant }}" = gplasync ]; then VER="${{ matrix.dxvk }}-gplasync-arm64ec-dm"; else VER="${{ matrix.dxvk }}-arm64ec-dm"; fi
           PKG=pkg && rm -rf "$PKG" && mkdir -p "$PKG/system32" "$PKG/syswow64"
           EC=dxvk/out/ec; [ -d "$EC/bin" ] && EC="$EC/bin"
           X32=dxvk/out/x32; [ -d "$X32/bin" ] && X32="$X32/bin"
@@ -101,7 +109,7 @@ jobs:
             "type": "DXVK",
             "versionName": "$VER",
             "versionCode": 0,
-            "description": "DXVK ${{ matrix.dxvk }} (upstream doitsujin/dxvk, unmodified) built as ARM64EC + x86 by Dmage22/dxvk wcp branch, ${GITHUB_SHA::7}.",
+            "description": "DXVK ${{ matrix.dxvk }} ${{ matrix.variant }} (upstream doitsujin/dxvk built as ARM64EC + x86 by Dmage22/dxvk wcp branch, ${GITHUB_SHA::7}.",
             "files": [${FILES%,}]
           }
           JSON
@@ -113,14 +121,14 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dxvk-${{ matrix.dxvk }}-arm64ec
+          name: dxvk-${{ matrix.dxvk }}-${{ matrix.variant }}-arm64ec
           path: ${{ env.WCP }}
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dxvk-${{ matrix.dxvk }}-arm64ec-${{ github.run_number }}
-          name: DXVK ${{ matrix.dxvk }} ARM64EC (build ${{ github.run_number }})
+          tag_name: dxvk-${{ matrix.dxvk }}-${{ matrix.variant }}-arm64ec-${{ github.run_number }}
+          name: DXVK ${{ matrix.dxvk }} ${{ matrix.variant }} ARM64EC (build ${{ github.run_number }})
           prerelease: true
           files: ${{ env.WCP }}
-          body: Unmodified upstream DXVK v${{ matrix.dxvk }}; system32 = ARM64EC, syswow64 = x86. Import in GameNative (Contents) and select it in DXVK mode.
+          body: Upstream DXVK v${{ matrix.dxvk }} (${{ matrix.variant }}; gplasync = Ph42oN/dxvk-gplasync patch, enable with GameNative's DXVK "Async" option); system32 = ARM64EC, syswow64 = x86. Import in GameNative (Contents) and select it in DXVK mode.
