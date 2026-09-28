@@ -1,0 +1,126 @@
+# Builds unmodified upstream DXVK (doitsujin/dxvk) as a GameNative/Winlator .wcp:
+# system32 = ARM64EC (runs natively, no FEX translation), syswow64 = 32-bit x86.
+# Add or change versions in the matrix and push to this branch.
+name: build-dxvk-arm64ec
+
+on:
+  push:
+    branches: [ wcp ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LLVM_MINGW: llvm-mingw-20260908-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dxvk: [ "2.7.1", "3.1.1" ]
+    steps:
+      - name: Checkout build tools
+        uses: actions/checkout@v4
+        with:
+          path: wcp
+
+      - name: Checkout DXVK v${{ matrix.dxvk }}
+        uses: actions/checkout@v4
+        with:
+          repository: doitsujin/dxvk
+          ref: v${{ matrix.dxvk }}
+          submodules: recursive
+          path: dxvk
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools python3-pip zstd
+          pip install --user --break-system-packages 'meson>=1.3'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache llvm-mingw
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains/${{ env.LLVM_MINGW }}
+          key: ${{ env.LLVM_MINGW }}
+
+      - name: Download llvm-mingw
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchains && cd ~/toolchains
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/${LLVM_MINGW}.tar.xz"
+          tar -xf "${LLVM_MINGW}.tar.xz" && rm "${LLVM_MINGW}.tar.xz"
+
+      - name: Set up toolchain
+        run: |
+          TC=~/toolchains/${LLVM_MINGW}/bin
+          echo "$TC" >> "$GITHUB_PATH"
+          # widl output does not depend on the target; fall back to the x86_64 one if there is no arm64ec wrapper
+          if [ ! -e "$TC/arm64ec-w64-mingw32-widl" ]; then
+            sed -i "s/arm64ec-w64-mingw32-widl/x86_64-w64-mingw32-widl/" wcp/tools/arm64ec.meson.ini
+          fi
+
+      - name: Apply llvm-mingw compatibility fixups
+        run: bash wcp/tools/libcxx-compat.sh dxvk
+
+      - name: Build 32-bit x86
+        working-directory: dxvk
+        run: |
+          meson setup build_x86 --cross-file ../wcp/tools/win32.meson.ini --buildtype release --strip --prefix "$PWD/out/x32"
+          ninja -C build_x86 install
+
+      - name: Build ARM64EC
+        working-directory: dxvk
+        run: |
+          meson setup build_ec --cross-file ../wcp/tools/arm64ec.meson.ini --buildtype release --strip --prefix "$PWD/out/ec"
+          ninja -C build_ec install
+
+      - name: Package .wcp
+        run: |
+          VER="${{ matrix.dxvk }}-arm64ec-dm"
+          PKG=pkg && rm -rf "$PKG" && mkdir -p "$PKG/system32" "$PKG/syswow64"
+          EC=dxvk/out/ec; [ -d "$EC/bin" ] && EC="$EC/bin"
+          X32=dxvk/out/x32; [ -d "$X32/bin" ] && X32="$X32/bin"
+          FILES=""
+          for f in "$EC"/*.dll; do
+            n=$(basename "$f")
+            cp "$f" "$PKG/system32/" && cp "$X32/$n" "$PKG/syswow64/"
+            FILES="$FILES{\"source\":\"system32/$n\",\"target\":\"\${system32}/$n\"},{\"source\":\"syswow64/$n\",\"target\":\"\${syswow64}/$n\"},"
+          done
+          python3 wcp/tools/pearch.py "$PKG"/system32/*.dll "$PKG"/syswow64/*.dll | tee arch.txt
+          if grep -q 'emulated' arch.txt || [ "$(grep -c 'ARM64EC' arch.txt)" -ne "$(ls "$PKG"/system32/*.dll | wc -l)" ]; then
+            echo "::error::system32 DLLs are not all ARM64EC"; exit 1
+          fi
+          cat > "$PKG/profile.json" <<JSON
+          {
+            "type": "DXVK",
+            "versionName": "$VER",
+            "versionCode": 0,
+            "description": "DXVK ${{ matrix.dxvk }} (upstream doitsujin/dxvk, unmodified) built as ARM64EC + x86 by Dmage22/dxvk wcp branch, ${GITHUB_SHA::7}.",
+            "files": [${FILES%,}]
+          }
+          JSON
+          python3 -m json.tool "$PKG/profile.json" > /dev/null
+          tar -C "$PKG" -I 'zstd -19' -cf "dxvk-$VER.wcp" profile.json system32 syswow64
+          echo "WCP=dxvk-$VER.wcp" >> "$GITHUB_ENV"
+          ls -l "dxvk-$VER.wcp"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-${{ matrix.dxvk }}-arm64ec
+          path: ${{ env.WCP }}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dxvk-${{ matrix.dxvk }}-arm64ec-${{ github.run_number }}
+          name: DXVK ${{ matrix.dxvk }} ARM64EC (build ${{ github.run_number }})
+          prerelease: true
+          files: ${{ env.WCP }}
+          body: Unmodified upstream DXVK v${{ matrix.dxvk }}; system32 = ARM64EC, syswow64 = x86. Import in GameNative (Contents) and select it in DXVK mode.
