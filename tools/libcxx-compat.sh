@@ -20,3 +20,8 @@ if [ -f src/dxvk/dxvk_pipemanager.cpp ] && grep -qzP 'std::piecewise_construct,\
   perl -0777 -i -pe 's/(std::piecewise_construct,\s*)std::tuple\(\)(\s*,)/${1}std::tuple(key)${2}/g' src/dxvk/dxvk_pipemanager.cpp
   echo "compat: fixed empty-tuple piecewise emplace"
 fi
+# Older releases use std::transform in config.cpp without including <algorithm>, which libc++ doesn't pull in transitively
+if grep -qs 'std::transform' src/util/config/config.cpp && ! grep -qs '#include <algorithm>' src/util/config/config.cpp; then
+  sed -i '0,/#include/s//#include <algorithm>\n#include/' src/util/config/config.cpp
+  echo "compat: added <algorithm> to config.cpp"
+fi
